@@ -1,0 +1,233 @@
+---
+title: "STATS369 Asssignment3"
+author: "222017321102034 DuYe"
+date: "5/8/2020"
+output: pdf_document
+---
+
+```{r setup, include=TRUE}
+knitr::opts_chunk$set(echo = TRUE)
+library(rpart)
+library(caret)
+library(dplyr)
+library(tidyverse)
+library(rattle)
+library(ggplot2)
+```
+
+## Load Data
+```{r}
+load("./AS3_datasets/spam.rda")
+```
+
+## Convert datatype
+```{r}
+# matrix to df
+word.df = data.frame(wordmatrix)
+word.df$is_spam = df$is_spam
+word.df$is_spam = factor(word.df$is_spam, levels = c(TRUE, FALSE))
+# str(word.df)
+```
+
+## Divide Set
+```{r}
+# Divide training set and test set
+set.seed(1)
+index=sample(2,nrow(word.df),replace = T,prob = c(0.7,0.3))
+train.df<-word.df[index==1,]
+test.df<-word.df[index==2,]
+```
+
+## Use rpart to fit
+```{r}
+tree1 <-rpart(is_spam~.,data = train.df)
+tree1
+```
+
+```{r}
+# Call the printcp function to check the complexity parameters
+printcp(tree1)
+```
+We can find the cp value from the execution result of the printcp command. This complex parameter can be used as a penalty factor for the size of the control tree. In short, the larger the value of cp, the smaller the split (nsplit). 
+
+The output parameter (rel error) indicates the average deviation ratio between the current classification model tree and the empty tree. 
+
+The xstd(Standard error of cross-validation) is very small for this tree model.
+
+```{r}
+# Call plotcp function to plot cost complexity parameters
+plotcp(tree1)
+```
+The bottom x-axis is the cp value, the y-week is the relative error, and the top x-axis is the size of the tree. The dotted line is the upper line of the standard deviation. From the figure, we know that when the size of the tree is 11, the error of the  cross-validation get minimum value.
+
+##  Pruning tree
+```{r,fig.width=8, fig.height=8}
+# Recursive split tree pruning
+
+min(tree1$cptable[,"xerror"])
+which.min(tree1$cptable[,"xerror"])
+
+tree1.cp<-tree1$cptable[9,"CP"]
+tree1.cp
+
+prune.tree<-prune(tree1,cp=tree1.cp)
+
+plot(prune.tree,margin = 0.01)
+text(prune.tree,all = T,use.n = T)
+
+
+```
+
+We have constructed a complex decision tree for the data set, but sometimes, in order to avoid over-adaptation, we need to remove some of the rules with weak classification and description capabilities to improve the prediction accuracy.
+
+Firstly, the minimal xerror in previous model is find. Secondly, get the cp value of tree with minimal xerror. Set the value of the parameter cp to be the same as the cp value recorded with the smallest xerror for pruning
+
+The prune tree seems the same as before. Fortunately, the tree itself is not complicated, and then use this tree to predict the test set and calculate the confusion matrix.
+
+
+```{r}
+predictions<-predict(prune.tree,test.df,type = "class")
+table(test.df$is_spam,predictions)
+
+# onfusionMatrix
+confusionMatrix(table(predictions,test.df$is_spam))
+```
+
+Judging from the confusion matrix, the accuracy rate is 94.25%, which is very good. However, the sensitivity is much smaller than specificity, which means this model could not find spam as well as ham.
+
+## Smaller cp value and rpart agian
+```{r, fig.width=8, fig.height=8}
+tree2 = rpart(is_spam~.,data = train.df, cp=1e-5,parms=list(split='information'))
+
+min(tree2$cptable[,"xerror"])
+
+which.min(tree2$cptable[,"xerror"])
+printcp(tree2)
+tree2.cp<-tree2$cptable[17,"CP"]
+tree2.cp
+
+prune.tree2<-prune(tree2,cp=tree2.cp)
+
+plot(prune.tree2,margin = 0.051)
+text(prune.tree2,all = F,use.n = F)
+```
+
+Allow smaller CP values, and pruning the tree with same steps.Then plot the tree.
+
+This tree is obviously much more complicated and deeper
+
+```{r, fig.width=6, fig.height=4}
+predictions2<-predict(prune.tree2,test.df,type = "class")
+
+confusionMatrix(table(test.df$is_spam,predictions2))
+```
+
+From the confusionmatrix of this model, the accuracy rate is slightly improved(94.89%) compared to the previous model. A more important indicator is that sensitivity(83.33%) has increased by nearly 20% this model can distinguish spam well. 
+
+## A 'Naïve Bayes' classifier
+```{r}
+# yi: The number of times this word appears in spam emails A total of 630 words (y1-y630)
+
+spams.df = word.df %>% filter(is_spam == TRUE)
+yi = apply(spams.df[,c(1:630)],2,sum,na.rm=T) 
+
+# ni: The number of times this word appears in non-spam emails A total of 630 words (n1-n630)
+nonspams.df = word.df %>% filter(is_spam == FALSE)
+ni = apply(nonspams.df[,c(1:630)],2,sum,na.rm=T) 
+
+# The overall evidence provided by having this word in a message
+ei = log(yi+1) - log(ni+1)
+```
+
+Intuitively, the greater the ei, the more words appear in spam, and the smaller the ei, the more words appear in non-spam.
+
+```{r,fig.width=8, fig.height=4}
+ei_mark = apply(word.df[,-631] * ei, 1, sum)
+word.df$ei_mark = ei_mark
+
+qplot(is_spam, ei_mark,data = word.df, geom= "boxplot", fill = is_spam) + 
+  ggtitle("ei mark for spam/non-spam")
+```
+From this picture, the ei_mark of spam / non-spam do has a certain difference. Ei for spam are a little smaller than ei for non-spam. This agianst the guess.
+
+```{r,fig.width=8, fig.height=3}
+threshold_list = seq(-100, 0, 0.5)
+num_of_model = length(threshold_list)
+sens = rep(NA, num_of_model)
+spec = rep(NA, num_of_model)
+prop = rep(NA, num_of_model)
+
+for (i in c(1:num_of_model)) {
+  predictions_tmp = rep(NA,5574)
+  for (j in c(1:5574)) {
+    if (ei_mark[j] >= threshold_list[i]) {
+      predictions_tmp[j] = TRUE
+    }else{
+      predictions_tmp[j] = FALSE
+    }
+  }
+  predictions_tmp = factor(predictions_tmp,levels = c(TRUE,FALSE))
+  t = table(word.df$is_spam,predictions_tmp)
+  sens[i] = t[1,1]/(t[1,1]+t[1,2])
+  spec[i] = t[2,2]/(t[2,1]+t[2,2])
+  prop[i] = summary(predictions_tmp)[1]/summary(predictions_tmp)[2]
+}
+
+
+ggplot() + 
+  geom_line(aes(x=threshold_list,y=sens, color="sensitivity")) +
+  geom_line(aes(x=threshold_list,y=spec,color="specificity")) + 
+  ggtitle("Sensitivity and Specificity in diiferent thresholds")
+
+ggplot() + 
+  geom_line(aes(x=sens,y=1-spec, color="ROC")) + 
+  ggtitle("ROC curve")
+
+ggplot() + 
+  geom_line(aes(x=threshold_list,y=prop, color="propotion")) + 
+  ggtitle("Propotion in different thresholds")
+
+```
+
+Set the threshold to -100 to 0, with a step size of 0.5. During the loop, I also calculated sens, spec, and predicted proportion respectively.
+
+### Proportion observed
+```{r}
+summary(word.df$is_spam)
+ # TRUE FALSE 
+ #  747  4827
+
+prop_actual = summary(word.df$is_spam)[1]/summary(word.df$is_spam)[2]
+prop_actual
+prop[189]
+```
+
+The label proportion of observed data is about 0.155, and if the threshold equal to threshold[189], the predicted proportion is almost the same as actual proportion.
+
+```{r}
+predictions_final = rep(NA,5574)
+threshold = threshold_list[189]
+for (i in c(1:5574)) {
+  if (ei_mark[i] >= threshold) {
+    predictions_final[i] = TRUE
+  }else{
+    predictions_final[i] = FALSE
+  }
+}
+predictions_final = factor(predictions_final,levels = c(TRUE,FALSE))
+
+confusionMatrix(table(predictions_final,word.df$is_spam))
+```
+
+We can see that the total correct rate is about 74%, but the sensitivity is only 4% though specificity is about 85.20%.
+
+In other words, although the predicted proportion are consistent with observed propotion, spam does not seem to be well differentiated by ei. Especially what kind of email is spam.
+
+## 3. Read the description at the UCI archive of how the dataset was constructed. Why is spam/non-spam accuracy likely to be higher with this dataset than in real life? What can you say about the generalisability of the classifier to particular populations of text users?
+
+Spam data are manual extraction from UK forum (425) and SMS Spam Corpus v.0.1(322)
+ham data come from mail SMS from Singapore volunteers(3375) and Caroline Tag(450)
+
+The vast majority of ham emails in this dataset come from SMS of university student volunteers in Singapore, which have similar user portraits, conversation patterns, and communication patterns (English for college students / Singaporeans, etc.), while spam comes from places such as British forums. , Its user portrait and English usage form may be basically different from those of ham, so the classifier can better distinguish these characteristics, and the real-life spam and non-spam language differences are smaller, users and people It is more complex and has fewer features that the classifier can judge, so the accuracy may be lower.
+
+If the classifier is trained based on a certain range of text, and the training samples come from a specific user group, then it has a better classification effect for samples from the same source, but its generality may not be so good, because different types Of spam may have different language patterns, and it is difficult to distinguish between classifiers that have not received similar training sets.
